@@ -52,3 +52,5 @@ The GitHub Actions workflow runs the same backend, frontend, and Bicep checks on
 - `GET /api/v1/integrations` reports unavailable integrations (`not_configured`) explicitly. The API does not return success for malware scans, Partner Center, or Azure AI. The Bicep file is an infrastructure foundation, not a production deployment.
 
 See [the detailed PRD requirement coverage and gaps](docs/MPFAI-MVP-Gaps.md), [product specification](docs/MPFAI-Product-Specification.md), and [technical specification](docs/MPFAI-Technical-Specification.md). Production requires, at minimum, Entra authentication/authorization, durable SQL and Blob adapters, malware scanning, private network controls, observability, and validated operational and security controls.
+
+For the current Bicep scaffold, see the [step-by-step Azure subscription deployment guide](docs/MPFAI-Azure-Deployment.md). It provisions only the infrastructure resources presently defined in Bicep; it does not deploy or host the application and explains the production release gates.
