@@ -14,6 +14,7 @@ public sealed record Citation(string DocumentId, string Version, string Location
 
 public sealed record FundingGuideline(
     string Id,
+    Guid OrganizationId,
     string Version,
     decimal Rate,
     decimal Cap,
@@ -26,6 +27,7 @@ public sealed record FundingGuideline(
 
 public sealed record FundingCalculationRequest(
     string GuidelineId,
+    Guid OrganizationId,
     decimal EligibleAmount,
     DateOnly AsOf,
     string? Currency = null);

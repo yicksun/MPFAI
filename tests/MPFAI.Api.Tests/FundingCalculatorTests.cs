@@ -7,13 +7,14 @@ namespace MPFAI.Api.Tests;
 public sealed class FundingCalculatorTests
 {
     private static readonly DateOnly CurrentDate = new(2026, 9, 26);
+    private static readonly Guid OrganizationId = Guid.Parse("d92aa7e4-691c-476d-a496-183861c18b37");
 
     private static FundingGuideline Guideline(
         bool approved = true,
         bool conflicted = false,
         DateOnly? from = null,
         DateOnly? to = null) =>
-        new("pilot", "2", 0.15m, 5000m, "USD", from ?? new DateOnly(2026, 1, 1), to ?? new DateOnly(2026, 12, 31),
+        new("pilot", OrganizationId, "2", 0.15m, 5000m, "USD", from ?? new DateOnly(2026, 1, 1), to ?? new DateOnly(2026, 12, 31),
             approved, conflicted, [new Citation("guide.pdf", "2", "p. 4, Funding table", "Eligible work reimbursed at 15%, capped at $5,000.")]);
 
     [Theory]
@@ -25,7 +26,7 @@ public sealed class FundingCalculatorTests
     public async Task Calculates_percentage_and_cap_boundaries(decimal baseAmount, decimal expected)
     {
         var calculator = new FundingCalculator(new InMemoryFundingGuidelineRepository([Guideline()]));
-        var result = await calculator.CalculateAsync(new FundingCalculationRequest("pilot", baseAmount, CurrentDate));
+        var result = await calculator.CalculateAsync(new FundingCalculationRequest("pilot", OrganizationId, baseAmount, CurrentDate));
         Assert.Equal(expected, result.Amount);
         Assert.Equal(FundingCalculator.FormulaVersion, result.FormulaVersion);
         Assert.Equal(2, result.Trace.Count);
@@ -36,7 +37,7 @@ public sealed class FundingCalculatorTests
     public async Task Repeated_calculation_is_identical()
     {
         var calculator = new FundingCalculator(new InMemoryFundingGuidelineRepository([Guideline()]));
-        var request = new FundingCalculationRequest("pilot", 12345.67m, CurrentDate);
+        var request = new FundingCalculationRequest("pilot", OrganizationId, 12345.67m, CurrentDate);
         var first = await calculator.CalculateAsync(request);
         var second = await calculator.CalculateAsync(request);
         Assert.Equal(first.Amount, second.Amount);
@@ -52,7 +53,7 @@ public sealed class FundingCalculatorTests
     {
         var calculator = new FundingCalculator(new InMemoryFundingGuidelineRepository([Guideline(approved, conflicted)]));
         var exception = await Assert.ThrowsAsync<FundingCalculationException>(() =>
-            calculator.CalculateAsync(new FundingCalculationRequest("pilot", 100, CurrentDate)));
+            calculator.CalculateAsync(new FundingCalculationRequest("pilot", OrganizationId, 100, CurrentDate)));
         Assert.Equal(code, exception.Code);
     }
 
@@ -61,7 +62,7 @@ public sealed class FundingCalculatorTests
     {
         var calculator = new FundingCalculator(new InMemoryFundingGuidelineRepository());
         var exception = await Assert.ThrowsAsync<FundingCalculationException>(() =>
-            calculator.CalculateAsync(new FundingCalculationRequest("missing", 100, CurrentDate)));
+            calculator.CalculateAsync(new FundingCalculationRequest("missing", OrganizationId, 100, CurrentDate)));
         Assert.Equal("guideline_missing", exception.Code);
     }
 
@@ -70,7 +71,7 @@ public sealed class FundingCalculatorTests
     {
         var calculator = new FundingCalculator(new InMemoryFundingGuidelineRepository([Guideline(to: new DateOnly(2026, 1, 31))]));
         var exception = await Assert.ThrowsAsync<FundingCalculationException>(() =>
-            calculator.CalculateAsync(new FundingCalculationRequest("pilot", 100, CurrentDate)));
+            calculator.CalculateAsync(new FundingCalculationRequest("pilot", OrganizationId, 100, CurrentDate)));
         Assert.Equal("guideline_expired", exception.Code);
     }
 
@@ -79,7 +80,7 @@ public sealed class FundingCalculatorTests
     {
         var calculator = new FundingCalculator(new InMemoryFundingGuidelineRepository([Guideline()]));
         var exception = await Assert.ThrowsAsync<FundingCalculationException>(() =>
-            calculator.CalculateAsync(new FundingCalculationRequest("pilot", 100, CurrentDate, "EUR")));
+            calculator.CalculateAsync(new FundingCalculationRequest("pilot", OrganizationId, 100, CurrentDate, "EUR")));
         Assert.Equal("currency_mismatch", exception.Code);
     }
 }

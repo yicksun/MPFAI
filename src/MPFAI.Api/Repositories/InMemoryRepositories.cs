@@ -58,19 +58,19 @@ public sealed class InMemoryFundingGuidelineRepository : IFundingGuidelineReposi
 
         foreach (var guideline in initial)
         {
-            _guidelines[guideline.Id] = guideline;
+            _guidelines[Key(guideline.OrganizationId, guideline.Id)] = guideline;
         }
     }
 
     public Task<IReadOnlyList<FundingGuideline>> ListAsync(CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<FundingGuideline>>(_guidelines.Values.OrderBy(x => x.Id).ToArray());
 
-    public Task<FundingGuideline?> GetAsync(string guidelineId, CancellationToken cancellationToken) =>
-        Task.FromResult(_guidelines.GetValueOrDefault(guidelineId));
+    public Task<FundingGuideline?> GetAsync(Guid organizationId, string guidelineId, CancellationToken cancellationToken) =>
+        Task.FromResult(_guidelines.GetValueOrDefault(Key(organizationId, guidelineId)));
 
     public Task<FundingGuideline> SaveAsync(FundingGuideline guideline, CancellationToken cancellationToken)
     {
-        _guidelines.AddOrUpdate(guideline.Id, guideline, (_, existing) =>
+        _guidelines.AddOrUpdate(Key(guideline.OrganizationId, guideline.Id), guideline, (_, existing) =>
         {
             if (string.CompareOrdinal(guideline.Version, existing.Version) <= 0)
             {
@@ -81,6 +81,19 @@ public sealed class InMemoryFundingGuidelineRepository : IFundingGuidelineReposi
         });
         return Task.FromResult(guideline);
     }
+
+    public Task DeactivateAsync(Guid organizationId, string guidelineId, CancellationToken cancellationToken)
+    {
+        var key = Key(organizationId, guidelineId);
+        if (_guidelines.TryGetValue(key, out var guideline))
+        {
+            _guidelines[key] = guideline with { Approved = false };
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private static string Key(Guid organizationId, string guidelineId) => $"{organizationId:N}:{guidelineId}";
 }
 
 public sealed class InMemoryAuditRepository : IAuditRepository

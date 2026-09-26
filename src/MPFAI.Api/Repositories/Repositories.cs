@@ -19,8 +19,9 @@ public interface IEngagementRepository
 public interface IFundingGuidelineRepository
 {
     Task<IReadOnlyList<FundingGuideline>> ListAsync(CancellationToken cancellationToken);
-    Task<FundingGuideline?> GetAsync(string guidelineId, CancellationToken cancellationToken);
+    Task<FundingGuideline?> GetAsync(Guid organizationId, string guidelineId, CancellationToken cancellationToken);
     Task<FundingGuideline> SaveAsync(FundingGuideline guideline, CancellationToken cancellationToken);
+    Task DeactivateAsync(Guid organizationId, string guidelineId, CancellationToken cancellationToken);
 }
 
 public interface IAuditRepository

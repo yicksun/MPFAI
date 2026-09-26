@@ -16,7 +16,7 @@ public sealed class FundingCalculator(IFundingGuidelineRepository guidelines)
             throw new ArgumentOutOfRangeException(nameof(request), "Eligible amount cannot be negative.");
         }
 
-        var guideline = await guidelines.GetAsync(request.GuidelineId, cancellationToken)
+        var guideline = await guidelines.GetAsync(request.OrganizationId, request.GuidelineId, cancellationToken)
             ?? throw new FundingCalculationException("guideline_missing", "The requested guideline does not exist.");
 
         if (!guideline.Approved)

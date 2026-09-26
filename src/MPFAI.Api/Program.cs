@@ -10,6 +10,8 @@ builder.Services.AddSingleton<IFundingGuidelineRepository>(_ =>
     new InMemoryFundingGuidelineRepository(builder.Configuration.GetSection("Guidelines").Get<FundingGuideline[]>()));
 builder.Services.AddSingleton<IAuditRepository, InMemoryAuditRepository>();
 builder.Services.AddSingleton<FundingCalculator>();
+builder.Services.AddSingleton<ISowAnalysisProvider, LocalSafeSowAnalysisProvider>();
+builder.Services.AddSingleton<WorkflowService>();
 builder.Services.AddProblemDetails();
 
 var app = builder.Build();
@@ -54,13 +56,42 @@ app.MapGet("/api/v1/engagements/{engagementId:guid}", async (Guid organizationId
     var engagement = await repository.GetAsync(organizationId, engagementId, token);
     return engagement is null ? Results.NotFound() : Results.Ok(engagement);
 });
-app.MapGet("/api/v1/guidelines", async (IFundingGuidelineRepository repository, CancellationToken token) =>
-    Results.Ok(await repository.ListAsync(token)));
-app.MapPost("/api/v1/funding/calculate", async (FundingCalculationRequest request, FundingCalculator calculator, CancellationToken token) =>
+app.MapGet("/api/v1/guidelines", (Guid organizationId, WorkflowService workflows) =>
+    Results.Ok(workflows.ListGuidelines(organizationId)));
+app.MapPost("/api/v1/guidelines", async (Guid organizationId, UploadGuidelineRequest request, WorkflowService workflows, CancellationToken token) =>
 {
     try
     {
-        return Results.Ok(await calculator.CalculateAsync(request, token));
+        var item = await workflows.UploadGuidelineAsync(organizationId, request.FileName,
+            Convert.FromBase64String(request.Base64Content), request.ProgramId, request.Version, request.Rate,
+            request.Cap, request.Currency, request.EffectiveFrom, request.EffectiveTo, request.Uploader, token);
+        return Results.Created($"/api/v1/guidelines/{item.Id}", item);
+    }
+    catch (FormatException)
+    {
+        return Results.ValidationProblem(new Dictionary<string, string[]> { ["base64Content"] = ["Guideline content must be valid base64."] });
+    }
+    catch (WorkflowException exception)
+    {
+        return WorkflowProblem(exception);
+    }
+});
+app.MapPost("/api/v1/guidelines/{guidelineId:guid}/approve", async (Guid organizationId, Guid guidelineId, ApproveGuidelineRequest request, WorkflowService workflows, CancellationToken token) =>
+{
+    try
+    {
+        return Results.Ok(await workflows.ApproveGuidelineAsync(organizationId, guidelineId, request.Approver, token));
+    }
+    catch (WorkflowException exception)
+    {
+        return WorkflowProblem(exception);
+    }
+});
+app.MapPost("/api/v1/funding/calculate", async (Guid organizationId, FundingCalculationRequest request, FundingCalculator calculator, CancellationToken token) =>
+{
+    try
+    {
+        return Results.Ok(await calculator.CalculateAsync(request with { OrganizationId = organizationId }, token));
     }
     catch (FundingCalculationException exception)
     {
@@ -71,10 +102,156 @@ app.MapPost("/api/v1/funding/calculate", async (FundingCalculationRequest reques
         return Results.ValidationProblem(new Dictionary<string, string[]> { ["eligibleAmount"] = [exception.Message] });
     }
 });
+app.MapPost("/api/v1/engagements/{engagementId:guid}/sow-analysis", async (Guid organizationId, Guid engagementId, SowAnalysisRequest request, WorkflowService workflows, CancellationToken token) =>
+{
+    try
+    {
+        return Results.Accepted(value: await workflows.StartSowJobAsync(organizationId, engagementId, request.Text, token));
+    }
+    catch (WorkflowException exception)
+    {
+        return WorkflowProblem(exception);
+    }
+});
+app.MapGet("/api/v1/sow-analysis", (Guid organizationId, WorkflowService workflows) =>
+    Results.Ok(workflows.ListJobs(organizationId)));
+app.MapPost("/api/v1/engagements/{engagementId:guid}/tasks", async (Guid organizationId, Guid engagementId, CreateTaskRequest request, WorkflowService workflows, CancellationToken token) =>
+{
+    try
+    {
+        var item = await workflows.CreateTaskAsync(organizationId, engagementId, request.Title, request.Owner, request.DueDate, token);
+        return Results.Created($"/api/v1/tasks/{item.Id}", item);
+    }
+    catch (WorkflowException exception)
+    {
+        return WorkflowProblem(exception);
+    }
+});
+app.MapGet("/api/v1/tasks", (Guid organizationId, WorkflowService workflows) =>
+    Results.Ok(workflows.ListTasks(organizationId)));
+app.MapPost("/api/v1/tasks/{taskId:guid}/state", async (Guid organizationId, Guid taskId, ChangeTaskStateRequest request, WorkflowService workflows, CancellationToken token) =>
+{
+    try
+    {
+        return Results.Ok(await workflows.ChangeTaskStateAsync(organizationId, taskId, request.State, request.Actor, token));
+    }
+    catch (WorkflowException exception)
+    {
+        return WorkflowProblem(exception);
+    }
+});
+app.MapPost("/api/v1/engagements/{engagementId:guid}/attribution", async (Guid organizationId, Guid engagementId, CreateAttributionRequest request, WorkflowService workflows, CancellationToken token) =>
+{
+    try
+    {
+        var item = await workflows.CreateAttributionAsync(new AttributionRecord(Guid.Empty, organizationId, engagementId,
+            request.PartnerId, request.CustomerTenantId, request.AzureScope, request.DeliveryIdentity, request.AssociationType,
+            AttributionState.SetupRequested), token);
+        return Results.Created($"/api/v1/attribution/{item.Id}", item);
+    }
+    catch (WorkflowException exception)
+    {
+        return WorkflowProblem(exception);
+    }
+});
+app.MapGet("/api/v1/attribution", (Guid organizationId, WorkflowService workflows) =>
+    Results.Ok(workflows.ListAttribution(organizationId)));
+app.MapPost("/api/v1/attribution/{attributionId:guid}/reported-complete", async (Guid organizationId, Guid attributionId, ReportAttributionRequest request, WorkflowService workflows, CancellationToken token) =>
+{
+    try
+    {
+        return Results.Ok(await workflows.ReportAttributionAsync(organizationId, attributionId, request.Reporter, token));
+    }
+    catch (WorkflowException exception)
+    {
+        return WorkflowProblem(exception);
+    }
+});
+app.MapPost("/api/v1/attribution/{attributionId:guid}/verify", async (Guid organizationId, Guid attributionId, VerifyAttributionRequest request, WorkflowService workflows, CancellationToken token) =>
+{
+    try
+    {
+        return Results.Ok(await workflows.VerifyAttributionAsync(organizationId, attributionId, request.Verifier, request.Method, request.EvidenceReference, token));
+    }
+    catch (WorkflowException exception)
+    {
+        return WorkflowProblem(exception);
+    }
+});
+app.MapPost("/api/v1/engagements/{engagementId:guid}/evidence", async (Guid organizationId, Guid engagementId, SubmitEvidenceRequest request, WorkflowService workflows, CancellationToken token) =>
+{
+    try
+    {
+        var item = await workflows.SubmitEvidenceAsync(organizationId, engagementId, request.Requirement, request.FileName, request.SubmittedBy, token);
+        return Results.Created($"/api/v1/evidence/{item.Id}", item);
+    }
+    catch (WorkflowException exception)
+    {
+        return WorkflowProblem(exception);
+    }
+});
+app.MapGet("/api/v1/evidence", (Guid organizationId, WorkflowService workflows) =>
+    Results.Ok(workflows.ListEvidence(organizationId)));
+app.MapPost("/api/v1/evidence/{evidenceId:guid}/review", async (Guid organizationId, Guid evidenceId, ReviewEvidenceRequest request, WorkflowService workflows, CancellationToken token) =>
+{
+    try
+    {
+        return Results.Ok(await workflows.ReviewEvidenceAsync(organizationId, evidenceId, request.Reviewer, request.Accepted, request.Comment, token));
+    }
+    catch (WorkflowException exception)
+    {
+        return WorkflowProblem(exception);
+    }
+});
+app.MapPost("/api/v1/engagements/{engagementId:guid}/claims", async (Guid organizationId, Guid engagementId, CreateClaimRequest request, WorkflowService workflows, CancellationToken token) =>
+{
+    try
+    {
+        var item = await workflows.CreateClaimAsync(organizationId, engagementId, request.ExternalClaimId, request.Currency, request.RequestedAmount, token);
+        return Results.Created($"/api/v1/claims/{item.Id}", item);
+    }
+    catch (WorkflowException exception)
+    {
+        return WorkflowProblem(exception);
+    }
+});
+app.MapGet("/api/v1/claims", (Guid organizationId, WorkflowService workflows) =>
+    Results.Ok(workflows.ListClaims(organizationId)));
+app.MapPost("/api/v1/claims/{claimId:guid}/state", async (Guid organizationId, Guid claimId, ChangeClaimStateRequest request, WorkflowService workflows, CancellationToken token) =>
+{
+    try
+    {
+        return Results.Ok(await workflows.ChangeClaimStateAsync(organizationId, claimId, request.State, token));
+    }
+    catch (WorkflowException exception)
+    {
+        return WorkflowProblem(exception);
+    }
+});
+app.MapGet("/api/v1/audit", async (Guid organizationId, IAuditRepository audit, CancellationToken token) =>
+    Results.Ok(await audit.ListAsync(organizationId, token)));
 
 app.Run();
 
+static IResult WorkflowProblem(WorkflowException exception)
+{
+    var status = exception.Code.EndsWith("_not_found", StringComparison.Ordinal) ? StatusCodes.Status404NotFound : StatusCodes.Status422UnprocessableEntity;
+    return Results.Problem(statusCode: status, title: exception.Code, detail: exception.Message);
+}
+
 public sealed record CreateCustomer([Required] string Name, string? Domain);
 public sealed record CreateEngagement([Required] Guid CustomerId, [Required] string Name);
+public sealed record UploadGuidelineRequest(string FileName, string Base64Content, string ProgramId, string Version, decimal Rate, decimal Cap, string Currency, DateOnly EffectiveFrom, DateOnly EffectiveTo, string Uploader);
+public sealed record ApproveGuidelineRequest(string Approver);
+public sealed record SowAnalysisRequest(string Text);
+public sealed record CreateTaskRequest(string Title, string Owner, DateOnly? DueDate);
+public sealed record ChangeTaskStateRequest(string State, string Actor);
+public sealed record CreateAttributionRequest(string PartnerId, string CustomerTenantId, string AzureScope, string DeliveryIdentity, string AssociationType);
+public sealed record ReportAttributionRequest(string Reporter);
+public sealed record VerifyAttributionRequest(string Verifier, string Method, string EvidenceReference);
+public sealed record SubmitEvidenceRequest(string Requirement, string FileName, string SubmittedBy);
+public sealed record ReviewEvidenceRequest(string Reviewer, bool Accepted, string Comment);
+public sealed record CreateClaimRequest(string ExternalClaimId, string Currency, decimal RequestedAmount);
+public sealed record ChangeClaimStateRequest(ClaimState State);
 
 public partial class Program;
