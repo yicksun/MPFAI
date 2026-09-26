@@ -51,8 +51,9 @@ public sealed class WorkflowService(
         decimal rate, decimal cap, string currency, DateOnly from, DateOnly to, string uploader,
         CancellationToken token)
     {
-        if (organizationId == Guid.Empty || string.IsNullOrWhiteSpace(programId) || string.IsNullOrWhiteSpace(uploader))
-            throw new WorkflowException("invalid_guideline", "Organization, program, and uploader are required.");
+        if (organizationId == Guid.Empty || string.IsNullOrWhiteSpace(fileName) ||
+            string.IsNullOrWhiteSpace(programId) || string.IsNullOrWhiteSpace(version) || string.IsNullOrWhiteSpace(uploader))
+            throw new WorkflowException("invalid_guideline", "Organization, filename, program, version, and uploader are required.");
         if (!string.Equals(Path.GetExtension(fileName), ".txt", StringComparison.OrdinalIgnoreCase))
             throw new WorkflowException("unsupported_guideline_file", "Local mode accepts UTF-8 .txt guideline files only; production malware scanning and document extraction are not configured.");
         if (content.Length is 0 or > 1_048_576)

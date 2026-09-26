@@ -34,6 +34,15 @@ public sealed class WorkflowServiceTests
             rate, cap, "USD", new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 31), $"uploader-{version}", CancellationToken.None);
 
     [Fact]
+    public async Task Guideline_requires_a_nonempty_version()
+    {
+        var (service, _, _, _) = Create();
+        var exception = await Assert.ThrowsAsync<WorkflowException>(() =>
+            UploadAsync(service, " ", 0.15m, 1000m, "Sample rule."));
+        Assert.Equal("invalid_guideline", exception.Code);
+    }
+
+    [Fact]
     public async Task Guideline_requires_independent_approval_and_calculation_is_organization_scoped()
     {
         var (service, _, calculations, _) = Create();

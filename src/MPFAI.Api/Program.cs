@@ -98,7 +98,7 @@ app.MapPost("/api/v1/guidelines", async (Guid organizationId, UploadGuidelineReq
             request.Cap, request.Currency, request.EffectiveFrom, request.EffectiveTo, request.Uploader, token);
         return Results.Created($"/api/v1/guidelines/{item.Id}", item);
     }
-    catch (FormatException)
+    catch (Exception exception) when (exception is FormatException or ArgumentException)
     {
         return Results.ValidationProblem(new Dictionary<string, string[]> { ["base64Content"] = ["Guideline content must be valid base64."] });
     }
