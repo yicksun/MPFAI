@@ -4,6 +4,11 @@ using MPFAI.Api.Repositories;
 using MPFAI.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+if (!builder.Environment.IsDevelopment())
+{
+    throw new InvalidOperationException("MPFAI currently supports local Development mode only. Configure Entra authentication and production adapters before deployment.");
+}
+
 builder.Services.AddSingleton<ICustomerRepository, InMemoryCustomerRepository>();
 builder.Services.AddSingleton<IEngagementRepository, InMemoryEngagementRepository>();
 builder.Services.AddSingleton<IFundingGuidelineRepository>(_ =>
@@ -11,13 +16,39 @@ builder.Services.AddSingleton<IFundingGuidelineRepository>(_ =>
 builder.Services.AddSingleton<IAuditRepository, InMemoryAuditRepository>();
 builder.Services.AddSingleton<FundingCalculator>();
 builder.Services.AddSingleton<ISowAnalysisProvider, LocalSafeSowAnalysisProvider>();
+builder.Services.AddSingleton<IImmutableDocumentStore, InMemoryDocumentStore>();
+builder.Services.AddSingleton<IMalwareScanner, UnconfiguredMalwareScanner>();
+builder.Services.AddSingleton<IPartnerCenterReportImporter, UnconfiguredPartnerCenterReportImporter>();
+builder.Services.AddSingleton<IIntegrationStatusProvider, LocalIntegrationStatusProvider>();
 builder.Services.AddSingleton<WorkflowService>();
 builder.Services.AddProblemDetails();
+builder.Services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
+builder.Services.AddOpenApi();
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
+    policy.WithOrigins(builder.Configuration["WebOrigin"] ?? "http://localhost:3000")
+        .AllowAnyHeader()
+        .AllowAnyMethod()));
 
 var app = builder.Build();
 app.UseExceptionHandler();
+app.UseCors();
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/api/v1") &&
+        (!Guid.TryParse(context.Request.Query["organizationId"], out var organizationId) || organizationId == Guid.Empty))
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await context.Response.WriteAsJsonAsync(new { title = "organization_id_required", detail = "A non-empty organizationId is required in local mode." });
+        return;
+    }
+
+    await next();
+});
+app.MapOpenApi();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", mode = "local-in-memory" }));
+app.MapGet("/api/v1/integrations", (IIntegrationStatusProvider statuses) => Results.Ok(statuses.GetStatuses()));
 app.MapGet("/api/v1/customers", async (Guid organizationId, ICustomerRepository repository, CancellationToken token) =>
     Results.Ok(await repository.ListAsync(organizationId, token)));
 app.MapPost("/api/v1/customers", async (CreateCustomer request, Guid organizationId, ICustomerRepository repository, IAuditRepository audit, CancellationToken token) =>

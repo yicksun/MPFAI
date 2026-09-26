@@ -16,7 +16,7 @@ public sealed class WorkflowServiceTests
         var engagements = new InMemoryEngagementRepository();
         var calculations = new InMemoryFundingGuidelineRepository();
         var audit = new InMemoryAuditRepository();
-        var service = new WorkflowService(engagements, calculations, audit, new LocalSafeSowAnalysisProvider());
+        var service = new WorkflowService(engagements, calculations, audit, new LocalSafeSowAnalysisProvider(), new InMemoryDocumentStore());
         return (service, engagements, calculations, audit);
     }
 
@@ -72,6 +72,22 @@ public sealed class WorkflowServiceTests
     }
 
     [Fact]
+    public async Task Replacing_a_guideline_supersedes_and_deactivates_old_calculations()
+    {
+        var (service, _, calculations, _) = Create();
+        var first = await UploadAsync(service, "v1", 0.15m, 1000m, "Initial approved source.");
+        await service.ApproveGuidelineAsync(OrganizationId, first.Id, "manager", CancellationToken.None);
+        var second = await UploadAsync(service, "v2", 0.15m, 1000m, "Replacement approved source.");
+        await service.ApproveGuidelineAsync(OrganizationId, second.Id, "manager", CancellationToken.None);
+
+        Assert.Equal(GuidelineState.Superseded, service.ListGuidelines(OrganizationId).Single(x => x.Id == first.Id).State);
+        var calculator = new FundingCalculator(calculations);
+        var exception = await Assert.ThrowsAsync<FundingCalculationException>(() =>
+            calculator.CalculateAsync(new FundingCalculationRequest(first.Id.ToString(), OrganizationId, 100m, Today)));
+        Assert.Equal("guideline_unapproved", exception.Code);
+    }
+
+    [Fact]
     public async Task Attribution_requires_report_and_independent_verifier()
     {
         var (service, engagements, _, _) = Create();
@@ -103,8 +119,23 @@ public sealed class WorkflowServiceTests
         Assert.Equal(JobState.ReadyForReview, job.State);
         Assert.Equal("local-text-review-only", job.Provider);
         Assert.Equal(2, job.SourceCitations.Count);
+        Assert.Equal("line 2", job.SourceCitations[1].Location);
         Assert.Contains("Partner qualifications", job.MissingInputs);
         Assert.Empty(service.ListJobs(OtherOrganizationId));
+    }
+
+    [Fact]
+    public async Task Evidence_decision_is_single_submission_reviewed_once()
+    {
+        var (service, engagements, _, _) = Create();
+        var engagementId = await CreateEngagementAsync(engagements);
+        var evidence = await service.SubmitEvidenceAsync(OrganizationId, engagementId, "delivery report", "report.txt", "contributor", CancellationToken.None);
+        var accepted = await service.ReviewEvidenceAsync(OrganizationId, evidence.Id, "reviewer", true, "Verified against scope.", CancellationToken.None);
+
+        Assert.Equal(EvidenceState.Accepted, accepted.State);
+        var duplicateDecision = await Assert.ThrowsAsync<WorkflowException>(() =>
+            service.ReviewEvidenceAsync(OrganizationId, evidence.Id, "reviewer", false, "Changed decision.", CancellationToken.None));
+        Assert.Equal("evidence_transition_invalid", duplicateDecision.Code);
     }
 
     [Fact]
@@ -124,5 +155,22 @@ public sealed class WorkflowServiceTests
         var impossible = await Assert.ThrowsAsync<WorkflowException>(() =>
             service.ChangeClaimStateAsync(OrganizationId, claim.Id, ClaimState.Paid, CancellationToken.None));
         Assert.Equal("claim_transition_invalid", impossible.Code);
+    }
+
+    [Fact]
+    public async Task Task_transitions_are_organization_scoped_and_audited()
+    {
+        var (service, engagements, _, audit) = Create();
+        var engagementId = await CreateEngagementAsync(engagements);
+        var task = await service.CreateTaskAsync(OrganizationId, engagementId, "Collect delivery evidence", "owner", Today, CancellationToken.None);
+
+        var hidden = await Assert.ThrowsAsync<WorkflowException>(() =>
+            service.ChangeTaskStateAsync(OtherOrganizationId, task.Id, "done", "attacker", CancellationToken.None));
+        Assert.Equal("task_not_found", hidden.Code);
+        var done = await service.ChangeTaskStateAsync(OrganizationId, task.Id, "in_progress", "owner", CancellationToken.None);
+        done = await service.ChangeTaskStateAsync(OrganizationId, done.Id, "done", "owner", CancellationToken.None);
+
+        Assert.Equal("done", done.State);
+        Assert.Contains(await audit.ListAsync(OrganizationId, CancellationToken.None), x => x.Action == "task.done");
     }
 }

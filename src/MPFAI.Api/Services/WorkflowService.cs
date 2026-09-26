@@ -18,10 +18,11 @@ public sealed class LocalSafeSowAnalysisProvider : ISowAnalysisProvider
 
     public SowAnalysisJob Analyze(Guid organizationId, Guid engagementId, string sowText)
     {
-        var snippets = sowText.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(line => line.Length > 0)
+        var snippets = sowText.Split('\n', StringSplitOptions.None)
+            .Select((line, index) => new { Text = line.TrimEnd('\r').Trim(), Line = index + 1 })
+            .Where(line => line.Text.Length > 0)
             .Take(20)
-            .Select((line, index) => new Citation("local-sow-input", "1", $"line {index + 1}", line[..Math.Min(line.Length, 500)]))
+            .Select(line => new Citation("local-sow-input", "1", $"line {line.Line}", line.Text[..Math.Min(line.Text.Length, 500)]))
             .ToArray();
 
         return new SowAnalysisJob(
@@ -35,10 +36,10 @@ public sealed class WorkflowService(
     IEngagementRepository engagements,
     IFundingGuidelineRepository calculatorGuidelines,
     IAuditRepository audit,
-    ISowAnalysisProvider sowProvider)
+    ISowAnalysisProvider sowProvider,
+    IImmutableDocumentStore documentStore)
 {
     private readonly ConcurrentDictionary<Guid, GuidelineDocument> _guidelines = new();
-    private readonly ConcurrentDictionary<Guid, byte[]> _guidelineContents = new();
     private readonly ConcurrentDictionary<Guid, SowAnalysisJob> _jobs = new();
     private readonly ConcurrentDictionary<Guid, DeliveryTask> _tasks = new();
     private readonly ConcurrentDictionary<Guid, AttributionRecord> _attribution = new();
@@ -83,8 +84,8 @@ public sealed class WorkflowService(
         var guideline = new GuidelineDocument(Guid.NewGuid(), organizationId, programId, version, Path.GetFileName(fileName),
             checksum, content.Length, rate, cap, currency.ToUpperInvariant(), from, to, uploader, null,
             GuidelineState.UnderReview, [citation], DateTimeOffset.UtcNow, ConflictReason: conflict);
+        await documentStore.PutAsync(organizationId, guideline.Id.ToString(), guideline.FileName, content, token);
         _guidelines[guideline.Id] = guideline;
-        _guidelineContents[guideline.Id] = content.ToArray();
         await audit.AppendAsync(new AuditEvent(Guid.NewGuid(), organizationId, uploader, "guideline.uploaded", "guideline", guideline.Id.ToString(), DateTimeOffset.UtcNow, checksum), token);
         return guideline;
     }
@@ -225,6 +226,8 @@ public sealed class WorkflowService(
     {
         if (!_evidence.TryGetValue(id, out var current) || current.OrganizationId != organizationId)
             throw new WorkflowException("evidence_not_found", "Evidence item not found.");
+        if (current.State != EvidenceState.SubmittedForReview)
+            throw new WorkflowException("evidence_transition_invalid", "Only evidence awaiting review can receive a decision.");
         var reviewed = current with { State = accepted ? EvidenceState.Accepted : EvidenceState.Rejected, Reviewer = reviewer, ReviewComment = comment };
         _evidence[id] = reviewed;
         await audit.AppendAsync(new AuditEvent(Guid.NewGuid(), organizationId, reviewer, accepted ? "evidence.accepted" : "evidence.rejected", "evidence", id.ToString(), DateTimeOffset.UtcNow), token);
